@@ -70,15 +70,17 @@ DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "ye
 DEMO_MODE_FALLBACK = os.getenv("DEMO_MODE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 client_openai = None
-if not DEMO_MODE:
-    if OpenAI is None:
-        raise ModuleNotFoundError(
-            "Pacote 'openai' nao encontrado. Instale com 'pip install openai' "
-            "ou ative DEMO_MODE=true no arquivo .env."
-        )
-    if not GEMMA_BASE_URL:
-        raise ValueError("Define GEMMA_BASE_URL para usar o modo online com Gemma.")
-    client_openai = OpenAI(base_url=GEMMA_BASE_URL, api_key=GEMMA_API_KEY)
+
+
+def can_use_online_llm():
+    return (not DEMO_MODE) and OpenAI is not None and bool(GEMMA_BASE_URL)
+
+
+def get_openai_client():
+    global client_openai
+    if client_openai is None and can_use_online_llm():
+        client_openai = OpenAI(base_url=GEMMA_BASE_URL, api_key=GEMMA_API_KEY)
+    return client_openai
 
 
 def extract_review_fields(review_line):
@@ -254,6 +256,10 @@ def build_demo_json_response(review_line):
 def get_runtime_mode_label():
     if DEMO_MODE:
         return "DEMO_MODE (analise local)"
+
+    if not can_use_online_llm():
+        return "DEMO_MODE fallback (configuracao online ausente)"
+
     return f"LLM online ({GEMMA_MODEL})"
 
 def parse_review_line_to_json(review_line):
@@ -262,8 +268,14 @@ def parse_review_line_to_json(review_line):
         print(demo_response)
         return demo_response
 
+    if not can_use_online_llm():
+        print("[WARN] Configuracao online ausente/invalida. Usando DEMO_MODE fallback.")
+        demo_response = build_demo_json_response(review_line)
+        print(demo_response)
+        return demo_response
+
     try:
-        llm_response = client_openai.chat.completions.create(
+        llm_response = get_openai_client().chat.completions.create(
             model=GEMMA_MODEL,
             messages=[
                 {"role":"system",
