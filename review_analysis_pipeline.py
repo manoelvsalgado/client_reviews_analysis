@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from llm_review_client import parse_review_line_to_json
 
@@ -45,6 +46,9 @@ def count_and_join_reviews(review_dicts):
     return positive_count, negative_count, neutral_count, joined_text
 
 def main():
+    llm_mode = os.getenv("LLM_MODE", "local").strip().lower()
+    print(f"LLM mode: {llm_mode}\n")
+
     review_lines = load_review_lines(REVIEW_FILE_PATH)
     reviews_json = build_reviews_json(review_lines)
     positives, negatives, neutrals, joined_reviews = count_and_join_reviews(reviews_json)
