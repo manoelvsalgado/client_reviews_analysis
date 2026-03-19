@@ -51,7 +51,11 @@ if st.button("🔍 Analisar Resenhas", type="primary"):
         progress.progress((i + 1) / len(review_lines), text=f"Processando {i + 1}/{len(review_lines)}...")
 
     progress.empty()
+    st.session_state["reviews_json"] = reviews_json
 
+# ── Exibir resultados (persiste mesmo após rerun do dropdown) ──────────────────
+if "reviews_json" in st.session_state:
+    reviews_json = st.session_state["reviews_json"]
     positives, negatives, neutrals, _ = count_and_join_reviews(reviews_json)
 
     # ── Métricas ──────────────────────────────────────────────────────────────
@@ -102,8 +106,7 @@ if st.button("🔍 Analisar Resenhas", type="primary"):
 
         with st.expander(f"{icon} {review.get('usuario', 'Usuário')} — {sentiment}"):
             st.markdown(f"**Original:** {review.get('resenha_original', '')}")
-            if review.get("resenha_pt") != review.get("resenha_original"):
-                st.markdown(f"**Tradução (PT):** {review.get('resenha_pt', '')}")
+            st.markdown(f"**Tradução (PT):** {review.get('resenha_pt', '')}")
 
     # ── Download JSON ─────────────────────────────────────────────────────────
     st.subheader("⬇️ Exportar")
