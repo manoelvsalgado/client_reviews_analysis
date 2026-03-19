@@ -77,9 +77,14 @@ def load_local_env_file(env_file: str = ".env"):
 
 load_local_env_file()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GEMMA_API_KEY") or "lm-studio"
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or os.getenv("GEMMA_BASE_URL")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL") or os.getenv("GEMMA_MODEL") or "gpt-4o-mini"
+GROQ_API_KEY = (
+    os.getenv("GROQ_API_KEY")
+    or os.getenv("OPENAI_API_KEY")
+    or os.getenv("GEMMA_API_KEY")
+    or "lm-studio"
+)
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("GEMMA_BASE_URL")
+GROQ_MODEL = os.getenv("GROQ_MODEL") or os.getenv("OPENAI_MODEL") or os.getenv("GEMMA_MODEL") or "llama-3.1-8b-instant"
 DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 DEMO_MODE_FALLBACK = os.getenv("DEMO_MODE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -87,13 +92,26 @@ client_openai = None
 
 
 def can_use_online_llm():
-    return (not DEMO_MODE) and OpenAI is not None and bool(OPENAI_BASE_URL)
+    return (not DEMO_MODE) and OpenAI is not None and bool(GROQ_BASE_URL)
 
 
 def get_openai_client():
     global client_openai
     if client_openai is None and can_use_online_llm():
-        client_openai = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
+        default_headers = None
+        if GROQ_BASE_URL and "openrouter.ai" in GROQ_BASE_URL:
+            app_url = os.getenv("APP_URL", "http://localhost:8501")
+            app_title = os.getenv("APP_TITLE", "Client Reviews Analysis")
+            default_headers = {
+                "HTTP-Referer": app_url,
+                "X-Title": app_title,
+            }
+
+        client_openai = OpenAI(
+            base_url=GROQ_BASE_URL,
+            api_key=GROQ_API_KEY,
+            default_headers=default_headers,
+        )
     return client_openai
 
 
@@ -376,7 +394,7 @@ def build_reviews_synthesis(review_dicts):
         )
 
         llm_response = get_openai_client().chat.completions.create(
-            model=OPENAI_MODEL,
+            model=GROQ_MODEL,
             messages=[
                 {"role": "system", "content": synthesis_prompt},
                 {"role": "user", "content": json.dumps(compact_reviews, ensure_ascii=False)},
@@ -411,7 +429,7 @@ def get_runtime_mode_label():
     if not can_use_online_llm():
         return "DEMO_MODE fallback (configuracao online ausente)"
 
-    return f"LLM online ({OPENAI_MODEL})"
+    return f"LLM online ({GROQ_MODEL})"
 
 def parse_review_line_to_json(review_line):
     if DEMO_MODE:
@@ -427,7 +445,7 @@ def parse_review_line_to_json(review_line):
 
     try:
         llm_response = get_openai_client().chat.completions.create(
-            model=OPENAI_MODEL,
+            model=GROQ_MODEL,
             messages=[
                 {"role":"system",
                 "content": SYSTEM_PROMPT},
