@@ -1,7 +1,6 @@
 import json
-import os
 from pathlib import Path
-from llm_review_client import parse_review_line_to_json
+from llm_review_client import parse_review_line_to_json, get_runtime_mode_label
 
 REVIEW_FILE_PATH = "app_reviews.txt"
 LEGACY_REVIEW_FILE_PATH = "app_reviews.txt"
@@ -46,8 +45,7 @@ def count_and_join_reviews(review_dicts):
     return positive_count, negative_count, neutral_count, joined_text
 
 def main():
-    llm_mode = os.getenv("LLM_MODE", "local").strip().lower()
-    print(f"LLM mode: {llm_mode}\n")
+    print(f"LLM provider: {get_runtime_mode_label()}\n")
 
     review_lines = load_review_lines(REVIEW_FILE_PATH)
     reviews_json = build_reviews_json(review_lines)

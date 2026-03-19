@@ -1,6 +1,11 @@
 import os
+import json
+from pathlib import Path
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ModuleNotFoundError:
+    OpenAI = None
 
 
 SYSTEM_PROMPT = """Você é um especialista em análise de dados e conversão de dados para JSON.
@@ -35,44 +40,115 @@ Regra importante: você deve retornar apenas o JSON, sem nenhum outro texto alé
 """
 
 
-def _is_online_demo_mode():
-    return os.getenv("LLM_MODE", "local").strip().lower() == "online"
+def load_local_env_file(env_file: str = ".env"):
+    env_path = Path(env_file)
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
 
 
-def _build_client_and_model():
-    if _is_online_demo_mode():
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("Define OPENAI_API_KEY para usar LLM_MODE=online.")
+load_local_env_file()
 
-        base_url = os.getenv("ONLINE_API_BASE_URL", "https://api.openai.com/v1")
-        model = os.getenv("ONLINE_CHAT_MODEL", "gpt-4o-mini")
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        return client, model
+GEMMA_API_KEY = os.getenv("GEMMA_API_KEY", "lm-studio")
+GEMMA_BASE_URL = os.getenv("GEMMA_BASE_URL")
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-3-4b")
+DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+DEMO_MODE_FALLBACK = os.getenv("DEMO_MODE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-    base_url = os.getenv("LOCAL_API_BASE_URL", "http://127.0.0.1:1234/v1")
-    api_key = os.getenv("LOCAL_API_KEY", "lm-studio")
-    model = os.getenv("LOCAL_CHAT_MODEL", "google/gemma-3-4b")
-    client = OpenAI(base_url=base_url, api_key=api_key)
-    return client, model
+client_openai = None
+if not DEMO_MODE:
+    if OpenAI is None:
+        raise ModuleNotFoundError(
+            "Pacote 'openai' nao encontrado. Instale com 'pip install openai' "
+            "ou ative DEMO_MODE=true no arquivo .env."
+        )
+    if not GEMMA_BASE_URL:
+        raise ValueError("Define GEMMA_BASE_URL para usar o modo online com Gemma.")
+    client_openai = OpenAI(base_url=GEMMA_BASE_URL, api_key=GEMMA_API_KEY)
 
 
-client_openai, configured_model = _build_client_and_model()
+def extract_review_fields(review_line):
+    parts = review_line.split("$", 2)
+    if len(parts) == 3:
+        _, user_name, review_text = parts
+        return user_name.strip() or "Usuario", review_text.strip()
+
+    return "Usuario", review_line.strip()
+
+
+def classify_sentiment_demo(review_text):
+    text = review_text.lower()
+
+    positive_words = [
+        "good", "great", "excellent", "awesome", "love", "liked", "amazing", "best",
+        "bom", "boa", "otimo", "ótimo", "excelente", "amei", "recomendo",
+    ]
+    negative_words = [
+        "bad", "terrible", "awful", "hate", "worst", "bug", "broken", "slow", "crash",
+        "ruim", "pessimo", "péssimo", "odiei", "horrivel", "horrível", "travando", "erro",
+    ]
+
+    positive_score = sum(1 for word in positive_words if word in text)
+    negative_score = sum(1 for word in negative_words if word in text)
+
+    if positive_score > negative_score:
+        return "Positiva"
+    if negative_score > positive_score:
+        return "Negativa"
+    return "Neutra"
+
+
+def build_demo_json_response(review_line):
+    user_name, review_text = extract_review_fields(review_line)
+    payload = {
+        "usuario": user_name,
+        "resenha_original": review_text,
+        "resenha_pt": review_text,
+        "avaliacao": classify_sentiment_demo(review_text),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def get_runtime_mode_label():
+    if DEMO_MODE:
+        return "DEMO_MODE (analise local)"
+    return f"LLM online ({GEMMA_MODEL})"
 
 def parse_review_line_to_json(review_line):
-    llm_response = client_openai.chat.completions.create(
-        model=configured_model,
-        messages=[
-            {"role":"system",
-            "content": SYSTEM_PROMPT},
+    if DEMO_MODE:
+        demo_response = build_demo_json_response(review_line)
+        print(demo_response)
+        return demo_response
 
-            {"role":"user",
-            "content": f"Resenha: {review_line}"}
-        ],
-        temperature=0.0
-    )
+    try:
+        llm_response = client_openai.chat.completions.create(
+            model=GEMMA_MODEL,
+            messages=[
+                {"role":"system",
+                "content": SYSTEM_PROMPT},
 
-    response_content = llm_response.choices[0].message.content or ""
-    cleaned_response = response_content.replace("```json", "").replace("```", "").strip()
-    print(cleaned_response)
-    return cleaned_response
+                {"role":"user",
+                "content": f"Resenha: {review_line}"}
+            ],
+            temperature=0.0
+        )
+
+        response_content = llm_response.choices[0].message.content or ""
+        cleaned_response = response_content.replace("```json", "").replace("```", "").strip()
+        print(cleaned_response)
+        return cleaned_response
+    except Exception as exc:
+        if not DEMO_MODE_FALLBACK:
+            raise
+
+        print(f"[WARN] Falha no LLM online ({exc}). Usando DEMO_MODE fallback.")
+        demo_response = build_demo_json_response(review_line)
+        print(demo_response)
+        return demo_response
