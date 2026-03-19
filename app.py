@@ -4,7 +4,7 @@ from collections import Counter
 
 import streamlit as st
 from review_analysis_pipeline import build_reviews_json, count_and_join_reviews
-from llm_review_client import get_runtime_mode_label
+from llm_review_client import get_runtime_mode_label, build_reviews_synthesis
 
 # ── Página ────────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -60,6 +60,11 @@ if "reviews_json" in st.session_state:
     reviews_json = st.session_state["reviews_json"]
     positives, negatives, neutrals, _ = count_and_join_reviews(reviews_json)
     language_counts = Counter(review.get("idioma", "Não identificado") for review in reviews_json)
+    synthesis_payload = build_reviews_synthesis(reviews_json)
+
+    st.subheader("🧠 Síntese Geral")
+    st.markdown(f"**Sentimento mais comum:** {synthesis_payload.get('sentimento_mais_comum', 'Neutra')}")
+    st.write(synthesis_payload.get("sintese", "Sem síntese disponível."))
 
     # ── Métricas ──────────────────────────────────────────────────────────────
     st.subheader("📊 Resumo")

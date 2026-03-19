@@ -1,15 +1,22 @@
 import os
 import json
 from pathlib import Path
-from langdetect import DetectorFactory, LangDetectException, detect_langs
+from collections import Counter
+
+try:
+    from langdetect import DetectorFactory, LangDetectException, detect_langs
+    DetectorFactory.seed = 0
+    HAS_LANGDETECT = True
+except ModuleNotFoundError:
+    DetectorFactory = None
+    LangDetectException = Exception
+    detect_langs = None
+    HAS_LANGDETECT = False
 
 try:
     from openai import OpenAI
 except ModuleNotFoundError:
     OpenAI = None
-
-
-DetectorFactory.seed = 0
 
 
 SYSTEM_PROMPT = """Você é um especialista em análise de dados e conversão de dados para JSON.
@@ -20,6 +27,13 @@ Eu quero que você analise essa resenha, e me retorne um JSON com as seguintes c
 - 'resenha_original': a resenha no idioma original que você recebeu
 - 'resenha_pt': a resenha traduzida para o português, deve estar sempre na língua portuguesa
 - 'avaliacao': uma avaliação se essa resenha foi 'Positiva', 'Negativa' ou 'Neutra' (apenas uma dessas opções)
+
+Regras obrigatórias:
+1) 'resenha_pt' deve estar em português, mesmo quando a resenha original já estiver em português.
+2) Use 'Neutra' somente quando não houver tom claramente positivo nem negativo.
+3) Se houver reclamação, frustração, bug, erro, travamento, limitação ou crítica relevante, classifique como 'Negativa'.
+4) Se houver elogio claro (ex.: excelente, ótimo, incrível, adorei), classifique como 'Positiva'.
+5) Retorne somente um JSON válido, sem texto extra.
 
 Exemplo de entrada:
 '879485937$Pedro Silva$This is a positive review for the app'
@@ -189,6 +203,14 @@ def detect_review_language(review_text):
         return "Idioma indefinido"
 
     hint_score = portuguese_hint_score(review_text)
+    eng_hint_score = english_hint_score(review_text)
+
+    if not HAS_LANGDETECT:
+        if hint_score >= 2:
+            return "Português"
+        if eng_hint_score >= 2:
+            return "Inglês"
+        return "Idioma indefinido"
 
     if alpha_count < 20 and hint_score >= 2:
         return "Português"
@@ -301,6 +323,85 @@ def build_demo_json_response(review_line):
         "avaliacao": classify_sentiment_demo(review_text),
     }
     return json.dumps(payload, ensure_ascii=False)
+
+
+def build_reviews_synthesis(review_dicts):
+    if not review_dicts:
+        return {
+            "sentimento_mais_comum": "Neutra",
+            "sintese": "Nenhuma avaliação analisada.",
+        }
+
+    sentiment_counts = Counter(review.get("avaliacao", "Neutra") for review in review_dicts)
+    language_counts = Counter(review.get("idioma", "Idioma indefinido") for review in review_dicts)
+
+    predominant_sentiment = max(
+        ("Positiva", "Negativa", "Neutra"),
+        key=lambda value: sentiment_counts.get(value, 0),
+    )
+
+    top_languages = ", ".join(
+        f"{lang} ({count})" for lang, count in language_counts.most_common(3)
+    )
+
+    default_summary = (
+        f"Foram analisadas {len(review_dicts)} avaliações. "
+        f"O sentimento mais comum foi {predominant_sentiment}. "
+        f"Distribuição: Positivas {sentiment_counts.get('Positiva', 0)}, "
+        f"Negativas {sentiment_counts.get('Negativa', 0)}, "
+        f"Neutras {sentiment_counts.get('Neutra', 0)}. "
+        f"Idiomas mais frequentes: {top_languages}."
+    )
+
+    if not can_use_online_llm():
+        return {
+            "sentimento_mais_comum": predominant_sentiment,
+            "sintese": default_summary,
+        }
+
+    try:
+        compact_reviews = [
+            {
+                "avaliacao": review.get("avaliacao", "Neutra"),
+                "idioma": review.get("idioma", "Idioma indefinido"),
+                "resenha_pt": review.get("resenha_pt", ""),
+            }
+            for review in review_dicts[:120]
+        ]
+
+        synthesis_prompt = (
+            "Crie uma síntese executiva curta (3-4 frases) em português sobre as avaliações a seguir. "
+            "Destaque os principais pontos positivos, negativos e oportunidades de melhoria. "
+            "Retorne APENAS um JSON com as chaves 'sentimento_mais_comum' e 'sintese'."
+        )
+
+        llm_response = get_openai_client().chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": synthesis_prompt},
+                {"role": "user", "content": json.dumps(compact_reviews, ensure_ascii=False)},
+            ],
+            temperature=0.0,
+        )
+
+        content = llm_response.choices[0].message.content or ""
+        cleaned = content.replace("```json", "").replace("```", "").strip()
+        payload = json.loads(cleaned)
+
+        sentiment_value = payload.get("sentimento_mais_comum", predominant_sentiment)
+        if sentiment_value not in {"Positiva", "Negativa", "Neutra"}:
+            sentiment_value = predominant_sentiment
+
+        synthesis_text = payload.get("sintese", "").strip() or default_summary
+        return {
+            "sentimento_mais_comum": sentiment_value,
+            "sintese": synthesis_text,
+        }
+    except Exception:
+        return {
+            "sentimento_mais_comum": predominant_sentiment,
+            "sintese": default_summary,
+        }
 
 
 def get_runtime_mode_label():
